@@ -5,9 +5,9 @@ use crate::colorease::ColorEase;
 use crate::frontend::{front_end, try_front_end};
 use crate::inputmap::InputMap;
 use crate::overlay::{
+    CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags, QuickSelectOverlay,
     confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program, launcher,
-    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
-    QuickSelectOverlay,
+    start_overlay, start_overlay_pane,
 };
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::scripting::guiwin::GuiWin;
@@ -16,7 +16,7 @@ use crate::selection::Selection;
 use crate::shapecache::*;
 use crate::tabbar::{TabBarItem, TabBarState};
 use crate::termwindow::background::{
-    load_background_image, reload_background_image, LoadedBackgroundLayer,
+    LoadedBackgroundLayer, load_background_image, reload_background_image,
 };
 use crate::termwindow::keyevent::{KeyTableArgs, KeyTableState};
 use crate::termwindow::modal::Modal;
@@ -28,15 +28,15 @@ use crate::termwindow::render::{
 use crate::termwindow::webgpu::WebGpuState;
 use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
-use anyhow::{anyhow, ensure, Context};
+use anyhow::{Context, anyhow, ensure};
 use config::keyassignment::{
     Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
     QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
 };
 use config::window::WindowLevel;
 use config::{
-    configuration, AudibleBell, ConfigHandle, Dimension, DimensionContext, FrontEndSelection,
-    GeometryOrigin, GuiPosition, TermConfig, WindowCloseConfirmation,
+    AudibleBell, ConfigHandle, Dimension, DimensionContext, FrontEndSelection, GeometryOrigin,
+    GuiPosition, TermConfig, WindowCloseConfirmation, configuration,
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
@@ -51,8 +51,8 @@ use mux::tab::{
 use mux::window::WindowId as MuxWindowId;
 use mux::{Mux, MuxNotification};
 use mux_lua::MuxPane;
-use smol::channel::Sender;
 use smol::Timer;
+use smol::channel::Sender;
 use std::cell::{RefCell, RefMut};
 use std::collections::{HashMap, LinkedList};
 use std::ops::Add;
@@ -130,12 +130,31 @@ pub enum TermWindowNotif {
         tx: Sender<String>,
     },
     GetEffectiveConfig(Sender<ConfigHandle>),
+    GetEffectiveTabConfig {
+        tab_id: TabId,
+        tx: Sender<ConfigHandle>,
+    },
+    GetEffectiveTabConfigOverrides {
+        tab_id: TabId,
+        tx: Sender<wezterm_dynamic::Value>,
+    },
     FinishWindowEvent {
         name: String,
         again: bool,
     },
     GetConfigOverrides(Sender<wezterm_dynamic::Value>),
     SetConfigOverrides(wezterm_dynamic::Value),
+    GetTabConfigOverrides {
+        tab_id: TabId,
+        tx: Sender<wezterm_dynamic::Value>,
+    },
+    SetTabConfigOverrides {
+        tab_id: TabId,
+        value: wezterm_dynamic::Value,
+    },
+    ClearTabConfigOverrides {
+        tab_id: TabId,
+    },
     CancelOverlayForPane(PaneId),
     CancelOverlayForTab {
         tab_id: TabId,
@@ -345,6 +364,7 @@ pub struct TabState {
     /// contents, we're overlaying a little internal application
     /// tab.  We'll also route input to it.
     pub overlay: Option<OverlayState>,
+    pub config_overrides: wezterm_dynamic::Value,
 }
 
 /// Manages the state/queue of lua based event handlers.
@@ -1174,6 +1194,16 @@ impl TermWindow {
                     .map_err(chan_err)
                     .context("send GetEffectiveConfig response")?;
             }
+            TermWindowNotif::GetEffectiveTabConfig { tab_id, tx } => {
+                tx.try_send(self.effective_config_for_tab_id(tab_id))
+                    .map_err(chan_err)
+                    .context("send GetEffectiveTabConfig response")?;
+            }
+            TermWindowNotif::GetEffectiveTabConfigOverrides { tab_id, tx } => {
+                tx.try_send(self.effective_config_overrides_for_tab_id(Some(tab_id)))
+                    .map_err(chan_err)
+                    .context("send GetEffectiveTabConfigOverrides response")?;
+            }
             TermWindowNotif::FinishWindowEvent { name, again } => {
                 self.finish_window_event(&name, again);
             }
@@ -1185,6 +1215,50 @@ impl TermWindow {
             TermWindowNotif::SetConfigOverrides(value) => {
                 if value != self.config_overrides {
                     self.config_overrides = value;
+                    self.config_was_reloaded();
+                }
+            }
+            TermWindowNotif::GetTabConfigOverrides { tab_id, tx } => {
+                let value = self
+                    .tab_state
+                    .borrow()
+                    .get(&tab_id)
+                    .map(|state| state.config_overrides.clone())
+                    .unwrap_or_default();
+                tx.try_send(value)
+                    .map_err(chan_err)
+                    .context("send GetTabConfigOverrides response")?;
+            }
+            TermWindowNotif::SetTabConfigOverrides { tab_id, value } => {
+                let mut should_reload = false;
+                {
+                    let mut tab_state = self.tab_state.borrow_mut();
+                    let state = tab_state.entry(tab_id).or_default();
+                    if state.config_overrides != value {
+                        state.config_overrides = value;
+                        should_reload = self.active_mux_tab_id() == Some(tab_id);
+                    }
+                }
+                if should_reload {
+                    self.config_was_reloaded();
+                }
+            }
+            TermWindowNotif::ClearTabConfigOverrides { tab_id } => {
+                let mut should_reload = false;
+                {
+                    let mut tab_state = self.tab_state.borrow_mut();
+                    if let Some(state) = tab_state.get_mut(&tab_id) {
+                        if state.config_overrides != Value::Null {
+                            state.config_overrides = Value::Null;
+                            should_reload = self.active_mux_tab_id() == Some(tab_id);
+                        }
+
+                        if state.overlay.is_none() && state.config_overrides == Value::Null {
+                            tab_state.remove(&tab_id);
+                        }
+                    }
+                }
+                if should_reload {
                     self.config_was_reloaded();
                 }
             }
@@ -1715,6 +1789,72 @@ impl TermWindow {
 }
 
 impl TermWindow {
+    fn merge_config_overrides(base: &Value, overlay: &Value) -> Value {
+        match (base, overlay) {
+            (Value::Object(base_obj), Value::Object(overlay_obj)) => {
+                let mut merged = base_obj.clone();
+                for (key, value) in overlay_obj {
+                    let next = if let Some(existing) = merged.get(key) {
+                        Self::merge_config_overrides(existing, value)
+                    } else {
+                        value.clone()
+                    };
+                    merged.insert(key.clone(), next);
+                }
+                Value::Object(merged)
+            }
+            (_, value) => value.clone(),
+        }
+    }
+
+    fn active_mux_tab_id(&self) -> Option<TabId> {
+        let mux = Mux::get();
+        let window = mux.get_window(self.mux_window_id)?;
+        window.get_active().map(|tab| tab.tab_id())
+    }
+
+    fn effective_config_overrides_for_tab_id(&self, tab_id: Option<TabId>) -> Value {
+        let mut effective = self.config_overrides.clone();
+
+        if let Some(tab_id) = tab_id {
+            if let Some(tab_state) = self.tab_state.borrow().get(&tab_id) {
+                if tab_state.config_overrides != Value::Null {
+                    effective =
+                        Self::merge_config_overrides(&effective, &tab_state.config_overrides);
+                }
+            }
+        }
+
+        effective
+    }
+
+    fn effective_config_overrides(&self) -> Value {
+        self.effective_config_overrides_for_tab_id(self.active_mux_tab_id())
+    }
+
+    fn config_for_overrides(&self, effective_overrides: &Value) -> ConfigHandle {
+        match config::overridden_config(effective_overrides) {
+            Ok(config) => config,
+            Err(err) => {
+                log::error!(
+                    "Failed to apply config overrides: {:#}: {:?}",
+                    err,
+                    effective_overrides
+                );
+                configuration()
+            }
+        }
+    }
+
+    fn effective_config_for_tab_id(&self, tab_id: TabId) -> ConfigHandle {
+        if self.active_mux_tab_id() == Some(tab_id) {
+            return self.config.clone();
+        }
+
+        let effective_overrides = self.effective_config_overrides_for_tab_id(Some(tab_id));
+        self.config_for_overrides(&effective_overrides)
+    }
+
     fn palette(&mut self) -> &ColorPalette {
         if self.palette.is_none() {
             self.palette
@@ -1724,23 +1864,11 @@ impl TermWindow {
     }
 
     pub fn config_was_reloaded(&mut self) {
-        log::debug!(
-            "config was reloaded, overrides: {:?}",
-            self.config_overrides
-        );
+        let effective_overrides = self.effective_config_overrides();
+        log::debug!("config was reloaded, overrides: {:?}", effective_overrides);
         self.key_table_state.clear_stack();
         self.connection_name = Connection::get().unwrap().name();
-        let config = match config::overridden_config(&self.config_overrides) {
-            Ok(config) => config,
-            Err(err) => {
-                log::error!(
-                    "Failed to apply config overrides to window: {:#}: {:?}",
-                    err,
-                    self.config_overrides
-                );
-                configuration()
-            }
-        };
+        let config = self.config_for_overrides(&effective_overrides);
         self.config = config.clone();
         self.palette.take();
 
@@ -2196,6 +2324,7 @@ impl TermWindow {
             window.save_and_then_set_active(tab_idx);
 
             drop(window);
+            self.config_was_reloaded();
 
             if let Some(tab) = self.get_active_pane_or_overlay() {
                 tab.focus_changed(true);

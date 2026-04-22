@@ -416,6 +416,11 @@ impl TabBarState {
         let mut x = 0;
         let mut items = vec![];
 
+        let status_cell_attrs = CellAttributes::default()
+            .set_background(ColorSpec::TrueColor(*colors.background()))
+            .set_foreground(ColorSpec::TrueColor(*colors.inactive_tab().fg_color))
+            .clone();
+
         let black_cell = Cell::blank_with_attrs(
             CellAttributes::default()
                 .set_background(ColorSpec::TrueColor(*colors.background()))
@@ -440,7 +445,7 @@ impl TabBarState {
             Self::integrated_title_buttons(mouse_x, &mut x, config, &mut items, &mut line, &colors);
         }
 
-        let left_status_line = parse_status_text(left_status, black_cell.attrs().clone());
+        let left_status_line = parse_status_text(left_status, status_cell_attrs.clone());
         if left_status_line.len() > 0 {
             items.push(TabEntry {
                 item: TabBarItem::LeftStatus,
@@ -578,7 +583,7 @@ impl TabBarState {
 
         let status_space_available = title_width.saturating_sub(x);
 
-        let mut right_status_line = parse_status_text(right_status, black_cell.attrs().clone());
+        let mut right_status_line = parse_status_text(right_status, status_cell_attrs);
         items.push(TabEntry {
             item: TabBarItem::RightStatus,
             title: right_status_line.clone(),

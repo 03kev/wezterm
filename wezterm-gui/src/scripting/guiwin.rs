@@ -1,14 +1,15 @@
 //! GuiWin represents a Gui TermWindow (as opposed to a Mux window) in lua code
 use super::luaerr;
-use crate::termwindow::TermWindowNotif;
 use crate::TermWindow;
+use crate::termwindow::TermWindowNotif;
 use config::keyassignment::{ClipboardCopyDestination, KeyAssignment};
 use luahelper::*;
 use mlua::{UserData, UserDataMethods, UserDataRef};
+use mux::Mux;
 use mux::pane::PaneId;
 use mux::window::WindowId as MuxWindowId;
-use mux::Mux;
 use mux_lua::MuxPane;
+use mux_lua::MuxTab;
 use termwiz_funcs::lines_to_escapes;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_toast_notification::ToastNotification;
@@ -181,6 +182,21 @@ impl UserData for GuiWin {
 
             Ok((*config).clone())
         });
+        methods.add_async_method(
+            "effective_tab_config",
+            |_, this, tab: UserDataRef<MuxTab>| async move {
+                let (tx, rx) = smol::channel::bounded(1);
+                this.window
+                    .notify(TermWindowNotif::GetEffectiveTabConfig { tab_id: tab.0, tx });
+                let config = rx
+                    .recv()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{:#}", e))
+                    .map_err(luaerr)?;
+
+                Ok((*config).clone())
+            },
+        );
         methods.add_async_method("get_config_overrides", |lua, this, _: ()| async move {
             let (tx, rx) = smol::channel::bounded(1);
             this.window.notify(TermWindowNotif::GetConfigOverrides(tx));
@@ -192,12 +208,61 @@ impl UserData for GuiWin {
 
             dynamic_to_lua_value(lua, overrides)
         });
+        methods.add_async_method(
+            "effective_tab_config_overrides",
+            |lua, this, tab: UserDataRef<MuxTab>| async move {
+                let (tx, rx) = smol::channel::bounded(1);
+                this.window
+                    .notify(TermWindowNotif::GetEffectiveTabConfigOverrides { tab_id: tab.0, tx });
+                let overrides = rx
+                    .recv()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{:#}", e))
+                    .map_err(luaerr)?;
+
+                dynamic_to_lua_value(lua, overrides)
+            },
+        );
+        methods.add_async_method(
+            "get_tab_config_overrides",
+            |lua, this, tab: UserDataRef<MuxTab>| async move {
+                let (tx, rx) = smol::channel::bounded(1);
+                this.window
+                    .notify(TermWindowNotif::GetTabConfigOverrides { tab_id: tab.0, tx });
+                let overrides = rx
+                    .recv()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{:#}", e))
+                    .map_err(luaerr)?;
+
+                dynamic_to_lua_value(lua, overrides)
+            },
+        );
         methods.add_method("set_config_overrides", |_, this, value: mlua::Value| {
             let value = lua_value_to_dynamic(value)?;
             this.window
                 .notify(TermWindowNotif::SetConfigOverrides(value));
             Ok(())
         });
+        methods.add_method(
+            "set_tab_config_overrides",
+            |_, this, (tab, value): (UserDataRef<MuxTab>, mlua::Value)| {
+                let value = lua_value_to_dynamic(value)?;
+                this.window.notify(TermWindowNotif::SetTabConfigOverrides {
+                    tab_id: tab.0,
+                    value,
+                });
+                Ok(())
+            },
+        );
+        methods.add_method(
+            "clear_tab_config_overrides",
+            |_, this, tab: UserDataRef<MuxTab>| {
+                this.window
+                    .notify(TermWindowNotif::ClearTabConfigOverrides { tab_id: tab.0 });
+                Ok(())
+            },
+        );
         methods.add_async_method("is_focused", |_, this, _: ()| async move {
             let (tx, rx) = smol::channel::bounded(1);
             this.window
