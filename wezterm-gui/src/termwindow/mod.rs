@@ -386,6 +386,7 @@ pub struct TermWindow {
     pub window: Option<Window>,
     pub config: ConfigHandle,
     pub config_overrides: wezterm_dynamic::Value,
+    applied_config_overrides: wezterm_dynamic::Value,
     os_parameters: Option<parameters::Parameters>,
     /// When we most recently received keyboard focus
     pub focused: Option<Instant>,
@@ -712,6 +713,7 @@ impl TermWindow {
             window_background,
             config: config.clone(),
             config_overrides: wezterm_dynamic::Value::default(),
+            applied_config_overrides: wezterm_dynamic::Value::default(),
             palette: None,
             focused: None,
             mux_window_id,
@@ -1359,7 +1361,11 @@ impl TermWindow {
                     self.mux_pane_output_event(pane_id);
                 }
                 MuxNotification::WindowInvalidated(_) => {
-                    window.invalidate();
+                    if self.active_config_overrides_changed() {
+                        self.config_was_reloaded();
+                    } else {
+                        window.invalidate();
+                    }
                     self.update_title_post_status();
                 }
                 MuxNotification::WindowRemoved(_window_id) => {
@@ -1832,6 +1838,10 @@ impl TermWindow {
         self.effective_config_overrides_for_tab_id(self.active_mux_tab_id())
     }
 
+    fn active_config_overrides_changed(&self) -> bool {
+        self.effective_config_overrides() != self.applied_config_overrides
+    }
+
     fn config_for_overrides(&self, effective_overrides: &Value) -> ConfigHandle {
         match config::overridden_config(effective_overrides) {
             Ok(config) => config,
@@ -1872,6 +1882,7 @@ impl TermWindow {
     pub fn config_was_reloaded(&mut self) {
         let effective_overrides = self.effective_config_overrides();
         log::debug!("config was reloaded, overrides: {:?}", effective_overrides);
+        self.applied_config_overrides = effective_overrides.clone();
         self.key_table_state.clear_stack();
         self.connection_name = Connection::get().unwrap().name();
         let config = self.config_for_overrides(&effective_overrides);
