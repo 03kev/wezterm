@@ -1855,6 +1855,12 @@ impl TermWindow {
         self.config_for_overrides(&effective_overrides)
     }
 
+    fn terminal_config_for_tab_id(&self, tab_id: TabId) -> Arc<dyn TerminalConfiguration> {
+        Arc::new(TermConfig::with_config(
+            self.effective_config_for_tab_id(tab_id),
+        ))
+    }
+
     fn palette(&mut self) -> &ColorPalette {
         if self.palette.is_none() {
             self.palette
@@ -1929,21 +1935,23 @@ impl TermWindow {
         }
 
         if let Some(window) = mux.get_window(self.mux_window_id) {
-            let term_config: Arc<dyn TerminalConfiguration> =
-                Arc::new(TermConfig::with_config(config.clone()));
             for tab in window.iter() {
+                let term_config = self.terminal_config_for_tab_id(tab.tab_id());
                 for pane in tab.iter_panes_ignoring_zoom() {
                     pane.pane.set_config(Arc::clone(&term_config));
                 }
             }
+            let active_term_config: Arc<dyn TerminalConfiguration> =
+                Arc::new(TermConfig::with_config(config.clone()));
             for state in self.pane_state.borrow().values() {
                 if let Some(overlay) = &state.overlay {
-                    overlay.pane.set_config(Arc::clone(&term_config));
+                    overlay.pane.set_config(Arc::clone(&active_term_config));
                 }
             }
-            for state in self.tab_state.borrow().values() {
+            for (tab_id, state) in self.tab_state.borrow().iter() {
                 if let Some(overlay) = &state.overlay {
-                    overlay.pane.set_config(Arc::clone(&term_config));
+                    let term_config = self.terminal_config_for_tab_id(*tab_id);
+                    overlay.pane.set_config(term_config);
                 }
             }
         }
