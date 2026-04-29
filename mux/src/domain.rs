@@ -13,7 +13,7 @@ use crate::Mux;
 use anyhow::{bail, Context, Error};
 use async_trait::async_trait;
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
-use config::{configuration, ExecDomain, SerialDomain, ValueOrFunc, WslDomain};
+use config::{configuration, ConfigHandle, ExecDomain, SerialDomain, ValueOrFunc, WslDomain};
 use downcast_rs::{impl_downcast, Downcast};
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, ExitStatus, MasterPty, PtySize, PtySystem};
@@ -37,11 +37,12 @@ pub fn alloc_domain_id() -> DomainId {
     DOMAIN_ID.fetch_add(1, ::std::sync::atomic::Ordering::Relaxed)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum SplitSource {
     Spawn {
         command: Option<CommandBuilder>,
         command_dir: Option<String>,
+        config: Option<ConfigHandle>,
     },
     MovePane(PaneId),
 }
@@ -102,8 +103,9 @@ pub trait Domain: Downcast + Send + Sync {
             SplitSource::Spawn {
                 command,
                 command_dir,
+                config,
             } => {
-                self.spawn_pane(split_size.second, command, command_dir)
+                self.spawn_pane_with_config(split_size.second, command, command_dir, config)
                     .await?
             }
             SplitSource::MovePane(src_pane_id) => {
@@ -147,6 +149,16 @@ pub trait Domain: Downcast + Send + Sync {
         command: Option<CommandBuilder>,
         command_dir: Option<String>,
     ) -> anyhow::Result<Arc<dyn Pane>>;
+
+    async fn spawn_pane_with_config(
+        &self,
+        size: TerminalSize,
+        command: Option<CommandBuilder>,
+        command_dir: Option<String>,
+        _config: Option<ConfigHandle>,
+    ) -> anyhow::Result<Arc<dyn Pane>> {
+        self.spawn_pane(size, command, command_dir).await
+    }
 
     /// The mux will call this method on the domain of the pane that
     /// is being moved to give the domain a chance to handle the movement.
@@ -451,9 +463,8 @@ impl LocalDomain {
         command: Option<CommandBuilder>,
         command_dir: Option<String>,
         pane_id: PaneId,
+        config: ConfigHandle,
     ) -> anyhow::Result<CommandBuilder> {
-        let config = configuration();
-
         let wsl = self.resolve_wsl_domain();
         let default_prog = wsl
             .as_ref()
@@ -593,9 +604,25 @@ impl Domain for LocalDomain {
         command: Option<CommandBuilder>,
         command_dir: Option<String>,
     ) -> anyhow::Result<Arc<dyn Pane>> {
+        self.spawn_pane_with_config(size, command, command_dir, None)
+            .await
+    }
+
+    async fn spawn_pane_with_config(
+        &self,
+        size: TerminalSize,
+        command: Option<CommandBuilder>,
+        command_dir: Option<String>,
+        config: Option<ConfigHandle>,
+    ) -> anyhow::Result<Arc<dyn Pane>> {
         let pane_id = alloc_pane_id();
         let cmd = self
-            .build_command(command, command_dir, pane_id)
+            .build_command(
+                command,
+                command_dir,
+                pane_id,
+                config.unwrap_or_else(configuration),
+            )
             .await
             .context("build_command")?;
         let pair = self

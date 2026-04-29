@@ -887,6 +887,7 @@ impl Domain for ClientDomain {
             SplitSource::Spawn {
                 command,
                 command_dir,
+                config: _,
             } => (command, command_dir, None),
             SplitSource::MovePane(move_pane_id) => (None, None, Some(move_pane_id)),
         };

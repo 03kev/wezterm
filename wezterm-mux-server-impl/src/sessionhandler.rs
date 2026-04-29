@@ -1054,6 +1054,7 @@ async fn split_pane(split: SplitPane, client_id: Option<Arc<ClientId>>) -> anyho
         SplitSource::Spawn {
             command: split.command,
             command_dir: split.command_dir,
+            config: None,
         }
     };
 

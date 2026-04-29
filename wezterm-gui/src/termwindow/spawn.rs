@@ -1,6 +1,7 @@
 use crate::spawn::SpawnWhere;
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use config::TermConfig;
+use mux::Mux;
 use std::sync::Arc;
 
 impl super::TermWindow {
@@ -13,13 +14,23 @@ impl super::TermWindow {
         } else {
             self.terminal_size
         };
-        let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
+        let config = match spawn_where {
+            SpawnWhere::SplitPane(_) => {
+                let mux = Mux::get();
+                mux.get_active_tab_for_window(self.mux_window_id)
+                    .map(|tab| self.effective_config_for_tab_id(tab.tab_id()))
+                    .unwrap_or_else(|| self.config.clone())
+            }
+            _ => self.config.clone(),
+        };
+        let term_config = Arc::new(TermConfig::with_config(config.clone()));
 
         crate::spawn::spawn_command_impl(
             spawn,
             spawn_where,
             size,
             Some(self.mux_window_id),
+            config,
             term_config,
         )
     }

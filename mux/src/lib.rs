@@ -1213,6 +1213,7 @@ impl Mux {
             SplitSource::Spawn {
                 command,
                 command_dir,
+                config,
             } => SplitSource::Spawn {
                 command,
                 command_dir: self.resolve_cwd(
@@ -1221,6 +1222,7 @@ impl Mux {
                     domain.domain_id(),
                     CachePolicy::FetchImmediate,
                 ),
+                config,
             },
             other => other,
         };

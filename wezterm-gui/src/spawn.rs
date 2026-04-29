@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context};
 use config::keyassignment::SpawnCommand;
-use config::TermConfig;
+use config::{ConfigHandle, TermConfig};
 use mux::activity::Activity;
 use mux::domain::SplitSource;
 use mux::tab::SplitRequest;
@@ -22,13 +22,21 @@ pub fn spawn_command_impl(
     spawn_where: SpawnWhere,
     size: TerminalSize,
     src_window_id: Option<MuxWindowId>,
+    spawn_config: ConfigHandle,
     term_config: Arc<TermConfig>,
 ) {
     let spawn = spawn.clone();
 
     promise::spawn::spawn(async move {
-        if let Err(err) =
-            spawn_command_internal(spawn, spawn_where, size, src_window_id, term_config).await
+        if let Err(err) = spawn_command_internal(
+            spawn,
+            spawn_where,
+            size,
+            src_window_id,
+            spawn_config,
+            term_config,
+        )
+        .await
         {
             log::error!("Failed to spawn: {:#}", err);
         }
@@ -41,6 +49,7 @@ pub async fn spawn_command_internal(
     spawn_where: SpawnWhere,
     size: TerminalSize,
     src_window_id: Option<MuxWindowId>,
+    spawn_config: ConfigHandle,
     term_config: Arc<TermConfig>,
 ) -> anyhow::Result<()> {
     let mux = Mux::get();
@@ -112,6 +121,7 @@ pub async fn spawn_command_internal(
                         SplitSource::Spawn {
                             command: cmd_builder,
                             command_dir: cwd,
+                            config: Some(spawn_config),
                         },
                         spawn.domain,
                     )

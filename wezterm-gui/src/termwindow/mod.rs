@@ -3179,7 +3179,8 @@ impl TermWindow {
                 if mux.iter_windows_in_workspace(&name).is_empty() {
                     let spawn = spawn.as_ref().map(|s| s.clone()).unwrap_or_default();
                     let size = self.terminal_size;
-                    let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
+                    let config = self.config.clone();
+                    let term_config = Arc::new(TermConfig::with_config(config.clone()));
                     let src_window_id = self.mux_window_id;
 
                     promise::spawn::spawn(async move {
@@ -3188,6 +3189,7 @@ impl TermWindow {
                             SpawnWhere::NewWindow,
                             size,
                             Some(src_window_id),
+                            config,
                             term_config,
                         )
                         .await
