@@ -8,7 +8,10 @@ use crate::os::macos::app::create_app_delegate;
 use crate::screen::{ScreenInfo, Screens};
 use crate::spawn::*;
 use crate::Appearance;
-use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSScreen};
+use cocoa::appkit::{
+    NSApp, NSApplication, NSApplicationActivationPolicyAccessory,
+    NSApplicationActivationPolicyRegular, NSScreen,
+};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSArray, NSInteger};
 use objc::runtime::{Object, BOOL, YES};
@@ -34,7 +37,15 @@ impl Connection {
 
         unsafe {
             let ns_app = NSApp();
-            ns_app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+            let activation_policy = if matches!(
+                std::env::var("WEZTERM_MACOS_ACTIVATION_POLICY").as_deref(),
+                Ok("accessory")
+            ) {
+                NSApplicationActivationPolicyAccessory
+            } else {
+                NSApplicationActivationPolicyRegular
+            };
+            ns_app.setActivationPolicy_(activation_policy);
 
             let delegate = create_app_delegate();
             let () = msg_send![ns_app, setDelegate: delegate];

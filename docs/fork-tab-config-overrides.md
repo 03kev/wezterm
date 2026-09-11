@@ -132,3 +132,28 @@ Important code paths:
   paths may need separate handling if they need equivalent runtime environment
   propagation.
 - Existing process environments are out of scope for the fork.
+
+## macOS accessory activation policy
+
+The fork also supports a separate, opt-in behavior for launchers that embed a
+WezTerm window inside another application-owned workflow. Set this environment
+variable before starting `wezterm-gui`:
+
+```sh
+WEZTERM_MACOS_ACTIVATION_POLICY=accessory \
+  wezterm-gui start --always-new-process
+```
+
+On macOS, this selects `NSApplicationActivationPolicyAccessory`. The WezTerm
+process can still present and focus terminal windows, but it does not add its
+own icon to the Dock. The launcher can therefore own the visible application
+identity and lifecycle.
+
+This behavior is deliberately generic: the fork does not know which launcher
+or editor requested it. The environment variable is read once when the macOS
+GUI connection is created. If it is unset or contains any value other than
+`accessory`, WezTerm keeps the upstream regular application policy and its
+normal Dock presence.
+
+The implementation is isolated to
+`window/src/os/macos/connection.rs` and has no effect on other platforms.
